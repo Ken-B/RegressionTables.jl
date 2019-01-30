@@ -81,7 +81,9 @@ function regtable(rr::Union{AbstractRegressionResult,DataFrameRegressionModel}..
     number_regressions_decoration::Function = i::Int64 -> "($i)",
     print_fe_section = true,
     print_estimator_section = true,
-    renderSettings::RenderSettings = asciiOutput()
+    renderSettings::RenderSettings = asciiOutput(),
+    print_AFE_section = true,
+    kwargs...
     )
 
     # define some functions that makes use of StatsModels' RegressionModels
@@ -98,6 +100,10 @@ function regtable(rr::Union{AbstractRegressionResult,DataFrameRegressionModel}..
     ther2(r::AbstractRegressionResult) = r.r2
     ther2(r::DataFrameRegressionModel) = isa(r.model, LinearModel) ? r2(r) : NaN
 
+    #toegevoegd vertrekkend van stderr
+    pvals(r::AbstractRegressionResult) = r.pvals
+    stderrs(r::AbstractRegressionResult) = r.stderrs
+    tvals(r::AbstractRegressionResult) = r.tvals
 
     numberOfResults = size(rr,1)
 
@@ -120,28 +126,35 @@ function regtable(rr::Union{AbstractRegressionResult,DataFrameRegressionModel}..
         # take the list of regressors from the argument
         regressorList = regressors
     end
-
+        
     # for each regressor, check each regression result, calculate statistic, and construct block
     estimateBlock = Array{String}(0,numberOfResults+1)
+    print_below_statistic = below_statistic != :blank
     for regressor in regressorList
-        estimateLine = fill("", 2, numberOfResults+1)
+        estimateLine = fill("", ifelse(print_below_statistic,2,1), numberOfResults+1)
         for resultIndex = 1:numberOfResults
             thiscnames = coefnames(rr[resultIndex])
             thiscoef = coef(rr[resultIndex])
-            thisvcov = vcov(rr[resultIndex])
-            thisdf_residual = df_residual(rr[resultIndex])
+            thispvals = pvals(rr[resultIndex])
+            thisstderrs = stderrs(rr[resultIndex])
+            thistvals = tvals(rr[resultIndex])
+            # thisvcov = vcov(rr[resultIndex])
+            # thisdf_residual = df_residual(rr[resultIndex])
             index = find(regressor .== thiscnames)
             if !isempty(index)
-                pval = ccdf(FDist(1, thisdf_residual ), abs2(thiscoef[index[1]]/sqrt(thisvcov[index[1],index[1]])))
+                #pval = ccdf(FDist(1, thisdf_residual ), abs2(thiscoef[index[1]]/sqrt(thisvcov[index[1],index[1]])))
+                pval = thispvals[index[1]]
                 estimateLine[1,resultIndex+1] = estim_decoration(sprintf1(estimformat,thiscoef[index[1]]),pval)
                 if below_statistic == :tstat
-                    s = sprintf1(statisticformat, thiscoef[index[1]]/sqrt(thisvcov[index[1],index[1]]))
+                    # s = sprintf1(statisticformat, thiscoef[index[1]]/sqrt(thisvcov[index[1],index[1]]))
+                    s = sprintf1(statisticformat, thistvals[index[1]])
                     estimateLine[2,resultIndex+1] = below_decoration(s)
                 elseif below_statistic == :se
-                    s = sprintf1(statisticformat, sqrt(thisvcov[index[1],index[1]]))
+                    stderr = thisstderrs[index[1]]
+                    s = sprintf1(statisticformat, stderr)
                     estimateLine[2,resultIndex+1] = below_decoration(s)
                 elseif below_statistic == :blank
-                    estimateLine[2,resultIndex+1] = "" # for the sake of completeness
+                    # estimateLine[2,resultIndex+1] = "" # for the sake of completeness
                 end
             end
         end
@@ -171,6 +184,10 @@ function regtable(rr::Union{AbstractRegressionResult,DataFrameRegressionModel}..
             regressionNumberBlock[1,rIndex+1] = number_regressions_decoration(rIndex)
         end
     end
+
+    # Toevoegen AFEpsp
+    AFEBlock = ["AFE indiv."]
+    append!(AFEBlock, [sprintf1(estimformat, r.AFEpsp) for r in rr])
 
     # Fixed effects block
     print_fe_block = print_fe_section && any(isFERegressionResult.(rr))
@@ -203,6 +220,7 @@ function regtable(rr::Union{AbstractRegressionResult,DataFrameRegressionModel}..
             # take the user-supplied list of fixed effects
             feList = fixedeffects
         end
+
 
         # construct a list of fixed effects (strings) for each RegressionResult
         febyrr = Vector{Vector{String}}()
@@ -241,7 +259,7 @@ function regtable(rr::Union{AbstractRegressionResult,DataFrameRegressionModel}..
             else
                 # add label on the left:
                 feLine[1,1] = haskey(labels,fe) ? labels[fe] : fe
-                # add to estimateBlock
+                # add to feBlock
                 feBlock = [feBlock; feLine]
             end
         end
@@ -271,7 +289,7 @@ function regtable(rr::Union{AbstractRegressionResult,DataFrameRegressionModel}..
             if regression_statistics[i] == :nobs
                 statisticBlock[i,1] = haskey(labels, "__LABEL_STATISTIC_N__") ? labels["__LABEL_STATISTIC_N__"] : renderSettings.label_statistic_n
                 for resultIndex = 1:numberOfResults
-                    statisticBlock[i,resultIndex+1] = sprintf1("%i",nobs(rr[resultIndex]))
+                    statisticBlock[i,resultIndex+1] = sprintf1("%'i",nobs(rr[resultIndex]))
                 end
             elseif regression_statistics[i] == :r2
                 statisticBlock[i,1] = haskey(labels, "__LABEL_STATISTIC_R2__") ? labels["__LABEL_STATISTIC_R2__"] : renderSettings.label_statistic_r2
@@ -327,6 +345,10 @@ function regtable(rr::Union{AbstractRegressionResult,DataFrameRegressionModel}..
 
     if print_fe_block
         push!(bodyBlocks, feBlock)
+    end
+
+    if print_AFE_section
+        push!(bodyBlocks, reshape(AFEBlock, (1, length(AFEBlock))))
     end
 
     if print_estimator_section
